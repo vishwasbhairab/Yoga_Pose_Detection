@@ -1,377 +1,179 @@
-import cv2
 import torch
-import torch.nn.functional as F
-import mediapipe as mp
+import torch.nn as nn
+import torch.optim as optim
+import pandas as pd
 import numpy as np
-import json
-import os
-import sys
-from pathlib import Path
-import logging
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from torch.utils.data import Dataset, DataLoader
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Custom dataset class for yoga poses
+class YogaPoseDataset(Dataset):
+    def __init__(self, csv_file, transform=None):
+        df = pd.read_csv(csv_file)
+        self.labels = df['label'].values  # Column name is 'label'
+        
+        # Assuming all columns except 'label' are keypoints
+        self.keypoints = df.drop('label', axis=1).values
+        self.transform = transform
+        
+    def __len__(self):
+        return len(self.labels)
+    
+    def __getitem__(self, idx):
+        keypoints = self.keypoints[idx].astype(np.float32)  # Convert to float32 for PyTorch
+        label = self.labels[idx]
+        
+        if self.transform:
+            keypoints = self.transform(keypoints)
+            
+        return keypoints, label
 
-class YogaPoseDetector:
-    def __init__(self, model_path='yoga_pose_model_final.pth', label_map_path='label_map.json'):
-        """
-        Initialize the Yoga Pose Detector
+# Simple MLP model for yoga pose classification
+class YogaPoseClassifier(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes):
+        super(YogaPoseClassifier, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)  # First fully connected layer
+        self.relu = nn.ReLU()  # Activation function
+        self.fc2 = nn.Linear(hidden_size, hidden_size // 2)  # Second layer with reduced size
+        self.dropout = nn.Dropout(0.3)  # Dropout for regularization
+        self.fc3 = nn.Linear(hidden_size // 2, num_classes)  # Output layer
         
-        Args:
-            model_path (str): Path to the trained PyTorch model
-            label_map_path (str): Path to the label mapping JSON file
-        """
-        self.model = None
-        self.label_map = None
-        self.inv_label_map = None
-        self.pose = None
-        self.mp_pose = mp.solutions.pose
-        self.mp_drawing = mp.solutions.drawing_utils
-        
-        # Load components
-        self._load_label_map(label_map_path)
-        self._load_model(model_path)
-        self._initialize_mediapipe()
-        
-    def _load_label_map(self, label_map_path):
-        """Load label mapping from JSON file"""
-        try:
-            if not os.path.exists(label_map_path):
-                raise FileNotFoundError(f"Label map file not found: {label_map_path}")
-                
-            with open(label_map_path, 'r') as f:
-                self.label_map = json.load(f)
-            self.inv_label_map = {v: k for k, v in self.label_map.items()}
-            logger.info(f"Loaded {len(self.label_map)} pose classes")
-            
-        except Exception as e:
-            logger.error(f"Error loading label map: {e}")
-            sys.exit(1)
-    
-    def _load_model(self, model_path):
-        """Load the trained PyTorch model"""
-        try:
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"Model file not found: {model_path}")
-            
-            # Determine device
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            logger.info(f"Using device: {device}")
-            
-            # Load the saved checkpoint
-            checkpoint = torch.load(model_path, map_location=device)
-            
-            # Handle different save formats
-            if isinstance(checkpoint, dict):
-                # Your model is saved as a checkpoint dictionary
-                if 'model_state_dict' in checkpoint:
-                    logger.info("Loading model from checkpoint dictionary")
-                    
-                    # Get model parameters from checkpoint
-                    input_size = checkpoint.get('input_size', 132)  # Default to 132 (33 landmarks * 4 features)
-                    num_classes = checkpoint.get('num_classes', 82)  # Your model has 82 classes
-                    hidden_size = 128  # This is fixed in your training code
-                    
-                    # Verify num_classes matches label_map if available
-                    if self.label_map and len(self.label_map) != num_classes:
-                        logger.warning(f"Label map has {len(self.label_map)} classes but model expects {num_classes}")
-                        num_classes = len(self.label_map)
-                    
-                    logger.info(f"Model parameters: input_size={input_size}, num_classes={num_classes}, hidden_size={hidden_size}")
-                    
-                    # Create model with correct architecture
-                    self.model = self._create_model_architecture(
-                        input_size=input_size, 
-                        hidden_size=hidden_size, 
-                        num_classes=num_classes
-                    )
-                    
-                    # Load the state dict
-                    self.model.load_state_dict(checkpoint['model_state_dict'])
-                    
-                elif 'state_dict' in checkpoint:
-                    # Alternative checkpoint format
-                    logger.info("Loading model from state_dict")
-                    self.model = self._create_model_architecture(num_classes=82)
-                    self.model.load_state_dict(checkpoint['state_dict'])
-                else:
-                    # Assume the dict itself is the state_dict
-                    logger.info("Loading model from direct state_dict")
-                    self.model = self._create_model_architecture(num_classes=82)
-                    self.model.load_state_dict(checkpoint)
-            else:
-                # Case 2: Saved as complete model object
-                logger.info("Loading complete model object")
-                self.model = checkpoint
-            
-            self.model.eval()
-            self.device = device
-            
-            # Move model to device if using GPU
-            if device.type == 'cuda':
-                self.model = self.model.to(device)
-                
-            logger.info("Model loaded successfully")
-            
-        except Exception as e:
-            logger.error(f"Error loading model: {e}")
-            logger.error("Make sure your model file contains the correct checkpoint format")
-            raise e
-    
-    def _create_model_architecture(self, input_size=132, hidden_size=128, num_classes=None):
-        """
-        Recreate your exact model architecture from the training code.
-        This matches the YogaPoseClassifier from your training script.
-        """
-        import torch.nn as nn
-        
-        class YogaPoseClassifier(nn.Module):
-            def __init__(self, input_size, hidden_size, num_classes):
-                super(YogaPoseClassifier, self).__init__()
-                self.fc1 = nn.Linear(input_size, hidden_size)  # First fully connected layer
-                self.relu = nn.ReLU()  # Activation function
-                self.fc2 = nn.Linear(hidden_size, hidden_size // 2)  # Second layer with reduced size
-                self.dropout = nn.Dropout(0.3)  # Dropout for regularization
-                self.fc3 = nn.Linear(hidden_size // 2, num_classes)  # Output layer
-                
-            def forward(self, x):
-                out = self.fc1(x)
-                out = self.relu(out)
-                out = self.fc2(out)
-                out = self.relu(out)
-                out = self.dropout(out)
-                out = self.fc3(out)
-                return out
-        
-        # Use provided parameters or defaults
-        if num_classes is None:
-            num_classes = len(self.label_map) if self.label_map else 10
-        
-        model = YogaPoseClassifier(input_size=input_size, hidden_size=hidden_size, num_classes=num_classes)
-        
-        logger.info(f"Created YogaPoseClassifier with input_size={input_size}, hidden_size={hidden_size}, num_classes={num_classes}")
-        return model
-    
-    def _initialize_mediapipe(self):
-        """Initialize MediaPipe Pose with optimized settings"""
-        self.pose = self.mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,  # Balance between accuracy and speed
-            smooth_landmarks=True,
-            enable_segmentation=False,
-            smooth_segmentation=False,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-    
-    def extract_keypoints(self, results):
-        """
-        Extract keypoints from MediaPipe results
-        
-        Args:
-            results: MediaPipe pose detection results
-            
-        Returns:
-            list: Flattened keypoints array
-        """
-        keypoints = []
-        if results.pose_landmarks:
-            for lm in results.pose_landmarks.landmark:
-                keypoints.extend([lm.x, lm.y, lm.z, lm.visibility])
-        else:
-            keypoints = [0.0] * (33 * 4)  # 33 landmarks, 4 values each
-        return keypoints
-    
-    def preprocess_keypoints(self, keypoints):
-        """
-        Preprocess keypoints (normalize, filter, etc.)
-        
-        Args:
-            keypoints (list): Raw keypoints
-            
-        Returns:
-            torch.Tensor: Preprocessed keypoints tensor
-        """
-        # Convert to numpy for easier manipulation
-        keypoints_array = np.array(keypoints).reshape(-1, 4)  # 33 landmarks x 4 features
-        
-        # Filter out low-visibility keypoints (optional)
-        # You might want to set coordinates to 0 for low-visibility points
-        low_visibility_mask = keypoints_array[:, 3] < 0.3  # visibility threshold
-        keypoints_array[low_visibility_mask, :3] = 0  # Set x, y, z to 0 for low visibility points
-        
-        # Normalize coordinates (optional - depends on your training data)
-        # keypoints_array[:, :2] = keypoints_array[:, :2] * 2 - 1  # Normalize x, y to [-1, 1]
-        
-        # Flatten back to 1D
-        keypoints_flat = keypoints_array.flatten()
-        
-        # Convert to tensor
-        keypoints_tensor = torch.tensor([keypoints_flat], dtype=torch.float32)
-        
-        # Move to device if using GPU
-        if hasattr(self, 'device') and self.device.type == 'cuda':
-            keypoints_tensor = keypoints_tensor.to(self.device)
-            
-        return keypoints_tensor
-    
-    def predict_pose(self, keypoints):
-        """
-        Predict yoga pose from keypoints
-        
-        Args:
-            keypoints (list): Extracted keypoints
-            
-        Returns:
-            tuple: (predicted_label, confidence_score)
-        """
-        try:
-            keypoints_tensor = self.preprocess_keypoints(keypoints)
-            
-            with torch.no_grad():
-                output = self.model(keypoints_tensor)
-                
-                # Apply softmax to get probabilities
-                probabilities = F.softmax(output, dim=1)
-                confidence, pred = torch.max(probabilities, dim=1)
-                
-                pred_idx = pred.item()
-                confidence_score = confidence.item()
-                
-                # Get label name
-                if pred_idx in self.inv_label_map:
-                    label = self.inv_label_map[pred_idx]
-                else:
-                    label = "Unknown"
-                    logger.warning(f"Unknown prediction index: {pred_idx}")
-                
-                return label, confidence_score
-                
-        except Exception as e:
-            logger.error(f"Error in pose prediction: {e}")
-            return "Error", 0.0
-    
-    def draw_pose_info(self, frame, pose_label, confidence, results):
-        """
-        Draw pose information on the frame
-        
-        Args:
-            frame: OpenCV frame
-            pose_label (str): Predicted pose label
-            confidence (float): Prediction confidence
-            results: MediaPipe results
-        """
-        # Draw pose landmarks
-        if results.pose_landmarks:
-            self.mp_drawing.draw_landmarks(
-                frame, 
-                results.pose_landmarks, 
-                self.mp_pose.POSE_CONNECTIONS,
-                self.mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2, circle_radius=2),
-                self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
-            )
-        
-        # Create info box background
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 10), (400, 100), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-        
-        # Draw pose information
-        cv2.putText(frame, f'Pose: {pose_label}', (20, 40), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f'Confidence: {confidence:.2f}', (20, 70), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        # Add instructions
-        cv2.putText(frame, "Press 'q' to quit, 's' to save frame", (10, frame.shape[0] - 20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    
-    def run_detection(self, camera_id=0, save_frames=False):
-        """
-        Run real-time yoga pose detection
-        
-        Args:
-            camera_id (int): Camera device ID
-            save_frames (bool): Whether to enable frame saving
-        """
-        # Initialize camera
-        cap = cv2.VideoCapture(camera_id)
-        
-        # Check if camera opened successfully
-        if not cap.isOpened():
-            logger.error(f"Error: Could not open camera {camera_id}")
-            return
-        
-        # Set camera properties for better performance
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        
-        logger.info("Starting webcam. Press 'q' to exit, 's' to save frame.")
-        
-        frame_count = 0
-        
-        try:
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    logger.warning("Failed to read frame from camera")
-                    break
-                
-                frame_count += 1
-                
-                # Flip frame horizontally for mirror effect
-                frame = cv2.flip(frame, 1)
-                
-                # Convert BGR to RGB for MediaPipe
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Process pose detection
-                results = self.pose.process(rgb_frame)
-                
-                # Extract keypoints and predict
-                keypoints = self.extract_keypoints(results)
-                pose_label, confidence = self.predict_pose(keypoints)
-                
-                # Draw information on frame
-                self.draw_pose_info(frame, pose_label, confidence, results)
-                
-                # Display frame
-                cv2.imshow('Yoga Pose Detection', frame)
-                
-                # Handle key presses
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('s') and save_frames:
-                    # Save current frame
-                    filename = f'pose_frame_{frame_count}_{pose_label}_{confidence:.2f}.jpg'
-                    cv2.imwrite(filename, frame)
-                    logger.info(f"Saved frame: {filename}")
-                
-        except KeyboardInterrupt:
-            logger.info("Detection stopped by user")
-        except Exception as e:
-            logger.error(f"Error during detection: {e}")
-        finally:
-            # Cleanup
-            cap.release()
-            cv2.destroyAllWindows()
-            logger.info("Camera released and windows closed")
+    def forward(self, x):
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        out = self.relu(out)
+        out = self.dropout(out)
+        out = self.fc3(out)
+        return out
 
+# Training function
+def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=25):
+    best_acc = 0.0
+    device = next(model.parameters()).device  # Get the device from the model
+    
+    for epoch in range(num_epochs):
+        # Training phase
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        for inputs, labels in train_loader:
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            
+            optimizer.zero_grad()  # Zero the parameter gradients
+            outputs = model(inputs)  # Forward pass
+            loss = criterion(outputs, labels)  # Calculate loss
+            loss.backward()  # Backward pass
+            optimizer.step()  # Update weights
+            
+            running_loss += loss.item() * inputs.size(0)
+            _, predicted = torch.max(outputs, 1)  # Get predicted class
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+        
+        epoch_loss = running_loss / len(train_loader.dataset)
+        epoch_acc = correct / total
+        
+        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f}')
+        
+        # Validation phase
+        model.eval()  # Set model to evaluation mode
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+        
+        with torch.no_grad():  # No need to track gradients
+            for inputs, labels in val_loader:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                
+                val_loss += loss.item() * inputs.size(0)
+                _, predicted = torch.max(outputs, 1)
+                val_total += labels.size(0)
+                val_correct += (predicted == labels).sum().item()
+        
+        val_loss = val_loss / len(val_loader.dataset)
+        val_acc = val_correct / val_total
+        
+        print(f'Validation Loss: {val_loss:.4f}, Validation Acc: {val_acc:.4f}')
+        
+        # Save the best model based on validation accuracy
+        if val_acc > best_acc:
+            best_acc = val_acc
+            torch.save(model.state_dict(), 'best_yoga_model.pth')
+    
+    return model
+
+# Main execution code
 def main():
-    """Main function to run the yoga pose detector"""
-    try:
-        # Initialize detector
-        detector = YogaPoseDetector()
-        
-        # Run detection
-        detector.run_detection(camera_id=0, save_frames=True)
-        
-    except Exception as e:
-        logger.error(f"Error in main: {e}")
-        sys.exit(1)
+    # Load and preprocess data
+    train_data = pd.read_csv('train_pose_data.csv')
+    test_data = pd.read_csv('test_pose_data.csv')
+    
+    # Determine the input size (number of keypoints * dimensions per keypoint)
+    input_size = train_data.shape[1] - 1  # Subtract 1 for the label column
+    
+    # Get the number of unique classes
+    num_classes = len(train_data['label'].unique())
+    print(f"Number of yoga pose classes: {num_classes}")
+    
+    # Create datasets and dataloaders
+    train_dataset = YogaPoseDataset('train_pose_data.csv')
+    test_dataset = YogaPoseDataset('test_pose_data.csv')
+    
+    # Create data loaders with batch processing
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    
+    # Set device (GPU if available, otherwise CPU)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+    
+    # Initialize the model
+    model = YogaPoseClassifier(input_size=input_size, 
+                              hidden_size=128, 
+                              num_classes=num_classes).to(device)
+    
+    # Define loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    
+    # Train the model
+    model = train_model(model, train_loader, test_loader, criterion, optimizer, num_epochs=30)
+    
+    # Evaluate the model on test data
+    model.eval()
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs, 1)
+            
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    
+    print(f'Test Accuracy: {100 * correct / total:.2f}%')
+    
+    # Save the final model
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'num_classes': num_classes,
+        'input_size': input_size
+    }, 'yoga_pose_model_final.pth')
+    print("Model saved successfully!")
 
 if __name__ == "__main__":
     main()
