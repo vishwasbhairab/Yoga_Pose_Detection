@@ -297,8 +297,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For questions, suggestions, or collaboration opportunities:
 - **Email**: vishwaspandeyjuly29@gmail.com
-- **GitHub**: [@your-username](https://github.com/vishwasbhairab)
-- **LinkedIn**: [Your Name](https://linkedin.com/in/vishwaspandey1)
+- **GitHub**: [vishwasbhairab](https://github.com/vishwasbhairab)
+- **LinkedIn**: [Vishwas Pandey](https://linkedin.com/in/vishwaspandey1)
 
 ---
 
