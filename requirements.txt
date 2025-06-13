@@ -1,7 +1,7 @@
 # Streamlit Cloud Compatible Requirements
 # Python 3.12 compatible versions
 streamlit
-opencv-python-headless
+opencv-python
 torch>=2.2.0
 torchvision>=0.17.0
 mediapipe
