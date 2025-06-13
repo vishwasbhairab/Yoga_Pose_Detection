@@ -1,26 +1,26 @@
 # Core web framework
-streamlit>=1.28.0
+streamlit
 
 # Computer vision and image processing
-opencv-python-headless>=4.8.0
-Pillow>=10.0.0
+opencv-python-headless
+Pillow
 
 # Deep learning framework
-torch>=2.0.0
-torchvision>=0.15.0
+torch
+torchvision
 
 # Pose detection and MediaPipe
-mediapipe>=0.10.7
+mediapipe
 
 # Numerical computing and data handling
-numpy>=1.24.0
-pandas>=2.0.0
+numpy
+pandas
 
 # System and utility libraries
-pathlib2>=2.3.7
-logging>=0.4.9.6
+pathlib2
+logging
 
 # Additional dependencies that might be needed
-protobuf>=3.20.0,<4.0.0
-attrs>=21.4.0
-matplotlib>=3.7.0
+protobuf
+attrs
+matplotlib
