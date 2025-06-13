@@ -1,7 +1,28 @@
-streamlit==1.28.0
-opencv-python-headless==4.8.1.78
-torch==2.0.1
-torchvision==0.15.2
+# Streamlit Cloud Compatible Requirements
+# Core Dependencies - Streamlit Cloud optimized
+streamlit==1.32.0
+opencv-python-headless==4.9.0.80
+torch==2.1.2
+torchvision==0.16.2
 mediapipe==0.10.9
-numpy==1.24.3
-pillow==9.5.0
+numpy==1.24.4
+Pillow==10.2.0
+
+# Essential Data Processing
+pandas==2.0.3
+
+# Required for JSON handling (built-in alternative to json5)
+# json is built-in, no external dependency needed
+
+# Performance monitoring (lightweight)
+psutil==5.9.8
+
+# Optional: Visualization (lightweight versions)
+matplotlib==3.7.4
+
+# Protobuf compatibility fix for mediapipe
+protobuf==3.20.3
+
+# Additional essential packages
+requests==2.31.0
+urllib3==2.0.7
