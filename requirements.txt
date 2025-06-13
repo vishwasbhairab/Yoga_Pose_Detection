@@ -1,21 +1,26 @@
-# Streamlit Cloud Compatible Requirements
-# Python 3.12 compatible versions
-streamlit
-opencv-python
-torch>=2.2.0
-torchvision>=0.17.0
-mediapipe
-numpy
-Pillow
+# Core web framework
+streamlit>=1.28.0
 
-# Essential Data Processing
-pandas
+# Computer vision and image processing
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
 
-# Performance monitoring (lightweight)
-psutil
+# Deep learning framework
+torch>=2.0.0
+torchvision>=0.15.0
 
-# Protobuf compatibility fix for mediapipe
-protobuf>=3.20.0,<5.0.0
+# Pose detection and MediaPipe
+mediapipe>=0.10.7
 
-# Additional essential packages
-requests
+# Numerical computing and data handling
+numpy>=1.24.0
+pandas>=2.0.0
+
+# System and utility libraries
+pathlib2>=2.3.7
+logging>=0.4.9.6
+
+# Additional dependencies that might be needed
+protobuf>=3.20.0,<4.0.0
+attrs>=21.4.0
+matplotlib>=3.7.0
