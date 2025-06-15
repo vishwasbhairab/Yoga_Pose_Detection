@@ -2,7 +2,7 @@
 streamlit
 
 # Computer Vision and Image Processing
-opencv-python
+opencv-python-headless
 mediapipe
 Pillow
 
