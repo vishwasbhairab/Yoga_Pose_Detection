@@ -24,3 +24,6 @@ logging
 protobuf
 attrs
 matplotlib
+
+streamlit-webrtc
+av
