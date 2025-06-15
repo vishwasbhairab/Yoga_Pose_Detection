@@ -1,29 +1,29 @@
-# Core web framework
+# Core Streamlit and Web Framework
 streamlit
 
-# Computer vision and image processing
-opencv-python-headless
+# Computer Vision and Image Processing
+opencv-python
+mediapipe
 Pillow
 
-# Deep learning framework
+# Machine Learning and Deep Learning
 torch
 torchvision
-
-# Pose detection and MediaPipe
-mediapipe
-
-# Numerical computing and data handling
 numpy
-pandas
 
-# System and utility libraries
-pathlib2
-logging
-
-# Additional dependencies that might be needed
-protobuf
-attrs
-matplotlib
-
+# WebRTC and Real-time Streaming
 streamlit-webrtc
 av
+
+# Data Handling and Utilities
+json5
+pathlib2
+
+# Real-time Processing and Threading
+# threading - part of standard library
+# time - part of standard library
+# collections - part of standard library
+# asyncio - part of standard library
+
+# Logging (usually included in Python standard library, but specified for clarity)
+# logging - part of standard library
