@@ -28,9 +28,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# WebRTC Configuration
+# Enhanced WebRTC Configuration with multiple STUN servers
 RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    "iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+        {"urls": ["stun:stun2.l.google.com:19302"]},
+        {"urls": ["stun:stun.services.mozilla.com"]},
+    ]
 })
 
 class YogaPoseDetector:
@@ -65,7 +70,9 @@ class YogaPoseDetector:
         try:
             if not os.path.exists(label_map_path):
                 # Create a default label map if file doesn't exist
-                self.label_map = {str(i): f"Pose_{i}" for i in range(10)}
+                self.label_map = {
+                  
+                }
                 logger.warning(f"Label map file not found: {label_map_path}. Using default labels.")
             else:
                 with open(label_map_path, 'r') as f:
@@ -77,7 +84,9 @@ class YogaPoseDetector:
         except Exception as e:
             logger.error(f"Error loading label map: {e}")
             # Fallback to default
-            self.label_map = {str(i): f"Pose_{i}" for i in range(10)}
+            self.label_map = {
+           
+            }
             self.inv_label_map = {v: k for k, v in self.label_map.items()}
     
     def _load_model(self, model_path):
@@ -298,6 +307,7 @@ class VideoTransformer(VideoTransformerBase):
         self.enable_smoothing = True
         self.frame_count = 0
         self.frame_skip = 1
+        self.last_frame_time = time.time()
         
     def set_detector(self, detector):
         self.detector = detector
@@ -308,20 +318,25 @@ class VideoTransformer(VideoTransformerBase):
         self.enable_smoothing = enable_smoothing
         self.frame_skip = frame_skip
     
-    def transform(self, frame):
+    def recv(self, frame):
+        """Override recv method for better frame handling"""
         if self.detector is None:
-            return frame.to_ndarray(format="bgr24")
+            return frame
         
         self.frame_count += 1
         
         # Skip frames for performance
         if self.frame_count % (self.frame_skip + 1) != 0:
-            return frame.to_ndarray(format="bgr24")
+            return frame
         
         start_time = time.time()
         
         # Convert to numpy array
         img = frame.to_ndarray(format="bgr24")
+        
+        # Ensure the image is not empty
+        if img is None or img.size == 0:
+            return frame
         
         # Convert BGR to RGB for MediaPipe
         rgb_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -369,43 +384,36 @@ class VideoTransformer(VideoTransformerBase):
         # Update predictions for UI
         self.detector.update_predictions(display_pose, display_confidence, top_predictions, avg_fps, pose_detected)
         
-        # Add text overlay
-        cv2.putText(img, f"Pose: {display_pose}", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        cv2.putText(img, f"Confidence: {display_confidence:.1%}", (10, 60), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(img, f"FPS: {avg_fps:.1f}", (10, 90), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+        # Add text overlay with better positioning
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.7
+        thickness = 2
         
-        return img
+        # Add background rectangles for better text visibility
+        text_lines = [
+            f"Pose: {display_pose}",
+            f"Confidence: {display_confidence:.1%}",
+            f"FPS: {avg_fps:.1f}"
+        ]
+        
+        for i, text in enumerate(text_lines):
+            y_pos = 30 + i * 30
+            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+            
+            # Draw background rectangle
+            cv2.rectangle(img, (5, y_pos - 20), (text_size[0] + 15, y_pos + 5), (0, 0, 0), -1)
+            
+            # Draw text
+            color = (0, 255, 0) if i < 2 else (255, 0, 0)
+            cv2.putText(img, text, (10, y_pos), font, font_scale, color, thickness)
+        
+        # Convert back to av.VideoFrame
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 @st.cache_resource
 def load_detector():
     """Load the pose detector (cached)"""
     return YogaPoseDetector()
-
-def get_available_cameras():
-    """Get list of available cameras"""
-    cameras = []
-    
-    # Check common camera indices
-    for i in range(5):  # Check first 5 camera indices
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            ret, _ = cap.read()
-            if ret:
-                # Try to get camera name (works on some systems)
-                try:
-                    backend = cap.getBackendName()
-                    cameras.append(f"Camera {i} ({backend})")
-                except:
-                    cameras.append(f"Camera {i}")
-            cap.release()
-    
-    if not cameras:
-        cameras = ["Default Camera (0)", "Camera 1", "Camera 2"]
-    
-    return cameras
 
 def main():
     # Custom CSS for better styling
@@ -444,6 +452,17 @@ def main():
         margin: 0.5rem 0;
         border-left: 4px solid #1f77b4;
     }
+    
+    .video-container {
+        border: 2px solid #1f77b4;
+        border-radius: 15px;
+        overflow: hidden;
+        background: #000;
+        min-height: 400px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
     </style>
     """, unsafe_allow_html=True)
     
@@ -451,24 +470,11 @@ def main():
     st.markdown('<h1 class="main-header">🧘‍♀️ Real-time Yoga Pose Classifier</h1>', unsafe_allow_html=True)
     st.markdown('<p style="text-align: center; font-size: 1.2rem; color: #666;">Advanced AI-powered yoga pose detection using your webcam</p>', unsafe_allow_html=True)
     
+    # Check browser compatibility
+    st.info("📱 **Browser Compatibility**: This app works best in Chrome, Edge, or Firefox. Safari may have limitations.")
+    
     # Sidebar configuration
     st.sidebar.markdown("## 🎛️ Camera Settings")
-    
-    # Camera selection with user-friendly names
-    available_cameras = get_available_cameras()
-    selected_camera = st.sidebar.selectbox(
-        "📹 Select Camera",
-        options=available_cameras,
-        help="Choose your preferred camera device"
-    )
-    
-    # Extract camera index from selection
-    camera_index = 0
-    if "Camera" in selected_camera:
-        try:
-            camera_index = int(selected_camera.split("Camera ")[1].split(" ")[0])
-        except:
-            camera_index = 0
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("## 🎯 Detection Settings")
@@ -507,23 +513,23 @@ def main():
     
     with col1:
         if st.button("🏃‍♂️ Performance", help="Optimized for speed"):
-            st.session_state.confidence_threshold = 0.3
-            st.session_state.frame_skip = 3
-            st.session_state.show_landmarks = False
+            confidence_threshold = 0.3
+            frame_skip = 3
+            show_landmarks = False
             st.rerun()
     
     with col2:
         if st.button("🎯 Accuracy", help="Optimized for precision"):
-            st.session_state.confidence_threshold = 0.7
-            st.session_state.frame_skip = 0
-            st.session_state.show_landmarks = True
+            confidence_threshold = 0.7
+            frame_skip = 0
+            show_landmarks = True
             st.rerun()
     
     # Instructions
     st.sidebar.markdown("---")
     st.sidebar.markdown("## 📖 Instructions")
     st.sidebar.markdown("""
-    1. 🎥 **Start Camera**: Click the start button below
+    1. 🎥 **Allow Camera Access**: Click allow when prompted
     2. 🧘‍♀️ **Position Yourself**: Stand 6-8 feet from camera
     3. 🤸‍♀️ **Perform Poses**: Try different yoga poses
     4. 📊 **View Results**: Check real-time predictions
@@ -539,51 +545,68 @@ def main():
         # Load detector
         detector = load_detector()
         
-        # WebRTC streamer
-        webrtc_ctx = webrtc_streamer(
-            key="yoga-pose-detection",
-            mode=WebRtcMode.SENDRECV,
-            rtc_configuration=RTC_CONFIGURATION,
-            video_transformer_factory=VideoTransformer,
-            media_stream_constraints={
-                "video": {
-                    "width": {"min": 640, "ideal": 1280, "max": 1920},
-                    "height": {"min": 480, "ideal": 720, "max": 1080},
-                    "frameRate": {"ideal": 30, "max": 60}
+        # Video container with custom styling
+        video_container = st.container()
+        
+        with video_container:
+            # Enhanced WebRTC streamer with better configuration
+            webrtc_ctx = webrtc_streamer(
+                key="yoga-pose-detection",
+                mode=WebRtcMode.SENDRECV,
+                rtc_configuration=RTC_CONFIGURATION,
+                video_processor_factory=VideoTransformer,
+                media_stream_constraints={
+                    "video": {
+                        "width": {"min": 480, "ideal": 640, "max": 1280},
+                        "height": {"min": 360, "ideal": 480, "max": 720},
+                        "frameRate": {"ideal": 15, "max": 30}
+                    },
+                    "audio": False
                 },
-                "audio": False
-            },
-            async_processing=True,
-            video_html_attrs={
-                "style": {"width": "100%", "margin": "0 auto", "border-radius": "10px"},
-                "controls": False,
-                "autoplay": True,
-            }
-        )
+                async_processing=False,  # Changed to False for better stability
+                video_html_attrs={
+                    "style": {
+                        "width": "100%", 
+                        "height": "auto",
+                        "border-radius": "10px",
+                        "box-shadow": "0 4px 8px rgba(0,0,0,0.1)"
+                    },
+                    "controls": False,
+                    "autoplay": True,
+                    "muted": True,  # Added muted attribute
+                }
+            )
         
         # Configure video transformer
-        if webrtc_ctx.video_transformer:
-            webrtc_ctx.video_transformer.set_detector(detector)
-            webrtc_ctx.video_transformer.set_options(
+        if webrtc_ctx.video_processor:
+            webrtc_ctx.video_processor.set_detector(detector)
+            webrtc_ctx.video_processor.set_options(
                 show_landmarks, confidence_threshold, enable_smoothing, frame_skip
             )
         
-        # Camera controls
-        st.markdown("### 🎮 Camera Controls")
-        control_col1, control_col2, control_col3 = st.columns(3)
+        # Connection status
+        if webrtc_ctx.state.playing:
+            st.success("🟢 Camera is active and streaming")
+        else:
+            st.warning("🟡 Camera not active - Click 'START' to begin")
         
-        with control_col1:
-            if st.button("🎥 Start Camera", type="primary", help="Begin pose detection"):
-                st.info("Camera starting... Please allow camera permissions if prompted.")
-        
-        with control_col2:
-            if st.button("📸 Take Screenshot", help="Capture current frame"):
-                st.info("Screenshot feature coming soon!")
-        
-        with control_col3:
-            if st.button("🔄 Reset Settings", help="Reset all settings to default"):
-                st.session_state.clear()
-                st.rerun()
+        # Troubleshooting section
+        if not webrtc_ctx.state.playing:
+            with st.expander("🔧 Troubleshooting"):
+                st.markdown("""
+                **Camera not working?**
+                
+                1. **Allow camera permissions** when prompted by your browser
+                2. **Refresh the page** and try again
+                3. **Check if other apps** are using your camera
+                4. **Try a different browser** (Chrome/Edge recommended)
+                5. **Ensure HTTPS connection** (required for camera access)
+                
+                **Still having issues?**
+                - Check browser console for error messages
+                - Try incognito/private mode
+                - Disable browser extensions temporarily
+                """)
     
     with col2:
         st.markdown("### 📊 Live Results")
@@ -594,57 +617,57 @@ def main():
         fps_placeholder = st.empty()
         top_predictions_placeholder = st.empty()
         
-        # Update results in real-time
-        if webrtc_ctx.video_transformer and detector:
-            # Continuously update the results display
-            while webrtc_ctx.state.playing:
-                try:
-                    pose, confidence, top_preds, fps, detected = detector.get_current_predictions()
-                    
-                    # Current pose display
-                    with pose_placeholder.container():
-                        if detected and pose != "No Pose Detected":
-                            confidence_class = "confidence-high" if confidence > 0.7 else "confidence-medium" if confidence > 0.4 else "confidence-low"
-                            st.markdown(f"""
-                            <div class="prediction-card">
-                                <h3>🧘‍♀️ Current Pose</h3>
-                                <h2 class="{confidence_class}">{pose}</h2>
-                                <p>Confidence: {confidence:.1%}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.info("🔍 No pose detected - position yourself in view of the camera")
-                    
-                    # Confidence meter
-                    with confidence_placeholder.container():
-                        if detected:
-                            st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-                            st.metric("🎯 Confidence Score", f"{confidence:.1%}")
-                            st.progress(confidence)
-                            st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # FPS display
-                    with fps_placeholder.container():
-                        color = "🟢" if fps > 20 else "🟡" if fps > 10 else "🔴"
+        # Initialize session state for results
+        if 'last_update_time' not in st.session_state:
+            st.session_state.last_update_time = time.time()
+        
+        # Update results if video is playing
+        if webrtc_ctx.state.playing and webrtc_ctx.video_processor and detector:
+            try:
+                pose, confidence, top_preds, fps, detected = detector.get_current_predictions()
+                
+                # Current pose display
+                with pose_placeholder.container():
+                    if detected and pose != "No Pose Detected":
+                        confidence_class = "confidence-high" if confidence > 0.7 else "confidence-medium" if confidence > 0.4 else "confidence-low"
+                        st.markdown(f"""
+                        <div class="prediction-card">
+                            <h3>🧘‍♀️ Current Pose</h3>
+                            <h2 class="{confidence_class}">{pose}</h2>
+                            <p>Confidence: {confidence:.1%}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.info("🔍 No pose detected - position yourself in view of the camera")
+                
+                # Confidence meter
+                with confidence_placeholder.container():
+                    if detected:
                         st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-                        st.metric(f"{color} Performance", f"{fps:.1f} FPS")
+                        st.metric("🎯 Confidence Score", f"{confidence:.1%}")
+                        st.progress(confidence)
                         st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # Top predictions
-                    with top_predictions_placeholder.container():
-                        if top_preds and detected:
-                            st.markdown("### 🏆 Top 3 Predictions")
-                            for i, (label, prob) in enumerate(top_preds[:3]):
-                                emoji = "🥇" if i == 0 else "🥈" if i == 1 else "🥉"
-                                confidence_bar = "▓" * int(prob * 20) + "░" * (20 - int(prob * 20))
-                                st.markdown(f"{emoji} **{label}**")
-                                st.markdown(f"`{confidence_bar}` {prob:.1%}")
-                    
-                    time.sleep(0.1)  # Update every 100ms
-                    
-                except Exception as e:
-                    logger.error(f"Error updating results: {e}")
-                    break
+                
+                # FPS display
+                with fps_placeholder.container():
+                    color = "🟢" if fps > 15 else "🟡" if fps > 8 else "🔴"
+                    st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+                    st.metric(f"{color} Performance", f"{fps:.1f} FPS")
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Top predictions
+                with top_predictions_placeholder.container():
+                    if top_preds and detected:
+                        st.markdown("### 🏆 Top 3 Predictions")
+                        for i, (label, prob) in enumerate(top_preds[:3]):
+                            emoji = "🥇" if i == 0 else "🥈" if i == 1 else "🥉"
+                            confidence_bar = "▓" * int(prob * 20) + "░" * (20 - int(prob * 20))
+                            st.markdown(f"{emoji} **{label}**")
+                            st.markdown(f"`{confidence_bar}` {prob:.1%}")
+                            
+            except Exception as e:
+                logger.error(f"Error updating results: {e}")
+                st.error("Error updating results. Please refresh the page.")
         else:
             st.info("🎥 Start the camera to see live results here")
     
@@ -675,10 +698,10 @@ def main():
     with tip_col3:
         st.markdown("""
         ### 🔧 **Troubleshooting**
+        - **Allow camera permissions** in browser
         - **Refresh page** if camera freezes
-        - Check **browser permissions**
-        - Try different **camera selection**
-        - Ensure **stable internet** connection
+        - **Use HTTPS** (required for camera)
+        - **Try different browser** if issues persist
         """)
     
     # System information
@@ -693,7 +716,7 @@ def main():
         with col2:
             st.markdown(f"""
             **WebRTC Status:** {'🟢 Active' if webrtc_ctx.state.playing else '🔴 Inactive'}  
-            **Camera Index:** {camera_index}  
+            **Connection State:** {webrtc_ctx.state.ice_connection_state if hasattr(webrtc_ctx.state, 'ice_connection_state') else 'Unknown'}  
             **Model Loaded:** {'✅ Yes' if detector and detector.model else '❌ No'}
             """)
 
